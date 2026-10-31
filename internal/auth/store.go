@@ -18,6 +18,9 @@ type executor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// organizerColumns is the column list scanOrganizer expects.
+const organizerColumns = "id, email, name, timezone, is_admin, oidc_issuer, oidc_subject, created_at, updated_at"
+
 // Store handles database operations for authentication.
 type Store struct {
 	db database.DB
@@ -36,7 +39,7 @@ func (s *Store) BeginTx(ctx context.Context) (database.Tx, error) {
 // FindOrganizerByEmail retrieves an organizer by their email address.
 func (s *Store) FindOrganizerByEmail(ctx context.Context, email string) (*Organizer, error) {
 	row := s.db.QueryRowContext(ctx,
-		"SELECT id, email, name, timezone, is_admin, created_at, updated_at FROM organizers WHERE email = ?",
+		"SELECT "+organizerColumns+" FROM organizers WHERE email = ?",
 		email,
 	)
 
@@ -55,7 +58,7 @@ func (s *Store) FindOrganizerByIDTx(ctx context.Context, tx database.Tx, id stri
 
 func findOrganizerByID(ctx context.Context, exec executor, id string) (*Organizer, error) {
 	row := exec.QueryRowContext(ctx,
-		"SELECT id, email, name, timezone, is_admin, created_at, updated_at FROM organizers WHERE id = ?",
+		"SELECT "+organizerColumns+" FROM organizers WHERE id = ?",
 		id,
 	)
 
@@ -77,6 +80,67 @@ func (s *Store) CreateOrganizer(ctx context.Context, email string) (*Organizer, 
 	}
 
 	return s.FindOrganizerByID(ctx, id)
+}
+
+// FindOrganizerByOIDC retrieves the organizer linked to the given OpenID
+// Connect issuer and subject.
+func (s *Store) FindOrganizerByOIDC(ctx context.Context, issuer, subject string) (*Organizer, error) {
+	row := s.db.QueryRowContext(ctx,
+		"SELECT "+organizerColumns+" FROM organizers WHERE oidc_issuer = ? AND oidc_subject = ?",
+		issuer, subject,
+	)
+	return scanOrganizer(row)
+}
+
+// CreateOIDCOrganizer creates an organizer that is linked to an OpenID
+// Connect identity from the start.
+func (s *Store) CreateOIDCOrganizer(ctx context.Context, email, name, issuer, subject string) (*Organizer, error) {
+	id := uuid.Must(uuid.NewV7()).String()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO organizers (id, email, name, oidc_issuer, oidc_subject, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		id, email, name, issuer, subject, now, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create oidc organizer: %w", err)
+	}
+
+	return s.FindOrganizerByID(ctx, id)
+}
+
+// LinkOIDCIdentity attaches an OpenID Connect identity to an organizer that
+// has none. It returns ErrAlreadyLinked when the organizer is already linked.
+func (s *Store) LinkOIDCIdentity(ctx context.Context, organizerID, issuer, subject string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE organizers SET oidc_issuer = ?, oidc_subject = ?, updated_at = ? WHERE id = ? AND oidc_subject IS NULL",
+		issuer, subject, now, organizerID,
+	)
+	if err != nil {
+		return fmt.Errorf("link oidc identity: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("link oidc identity: %w", err)
+	}
+	if rows == 0 {
+		return ErrAlreadyLinked
+	}
+	return nil
+}
+
+// UpdateOrganizerEmail changes the stored email of an organizer.
+func (s *Store) UpdateOrganizerEmail(ctx context.Context, organizerID, email string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE organizers SET email = ?, updated_at = ? WHERE id = ?",
+		email, now, organizerID,
+	)
+	if err != nil {
+		return fmt.Errorf("update organizer email: %w", err)
+	}
+	return nil
 }
 
 // UpdateOrganizer updates the name, timezone, and updated_at timestamp for an organizer.
@@ -511,14 +575,17 @@ func normalizeValue(v any) any {
 func scanOrganizer(row *sql.Row) (*Organizer, error) {
 	var o Organizer
 	var createdAt, updatedAt string
+	var oidcIssuer, oidcSubject sql.NullString
 
-	err := row.Scan(&o.ID, &o.Email, &o.Name, &o.Timezone, &o.IsAdmin, &createdAt, &updatedAt)
+	err := row.Scan(&o.ID, &o.Email, &o.Name, &o.Timezone, &o.IsAdmin, &oidcIssuer, &oidcSubject, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("scan organizer: %w", err)
 	}
+	o.OIDCIssuer = oidcIssuer.String
+	o.OIDCSubject = oidcSubject.String
 
 	o.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
 	if err != nil {

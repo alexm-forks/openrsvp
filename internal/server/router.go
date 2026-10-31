@@ -72,6 +72,8 @@ func (s *Server) routes() *chi.Mux {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{
 					"smsEnabled": s.cfg.SMSEnabled(),
+					"authMode":   s.authMode(),
+					"oidcName":   s.oidcName(),
 				},
 			})
 		})
@@ -146,6 +148,22 @@ func (s *Server) routes() *chi.Mux {
 	s.mountStaticFiles(r)
 
 	return r
+}
+
+// authMode names the organizer sign-in method for the frontend.
+func (s *Server) authMode() string {
+	if s.cfg.OIDCEnabled() {
+		return "oidc"
+	}
+	return "magic_link"
+}
+
+// oidcName is the provider label for the sign-in button, empty without OIDC.
+func (s *Server) oidcName() string {
+	if s.cfg.OIDCEnabled() {
+		return s.cfg.OIDCProviderName
+	}
+	return ""
 }
 
 // handleHealth returns a simple 200 OK with status information.

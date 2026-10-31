@@ -18,9 +18,11 @@ import (
 )
 
 var (
-	ErrInvalidEmail    = errors.New("invalid email address")
-	ErrInvalidToken    = errors.New("invalid or expired token")
-	ErrSessionNotFound = errors.New("session not found")
+	ErrInvalidEmail      = errors.New("invalid email address")
+	ErrInvalidToken      = errors.New("invalid or expired token")
+	ErrSessionNotFound   = errors.New("session not found")
+	ErrMagicLinkDisabled = errors.New("magic link sign-in is disabled")
+	ErrAlreadyLinked     = errors.New("organizer is already linked to an OIDC identity")
 )
 
 // EmailSender is a function that sends an email. This avoids a direct
@@ -69,6 +71,10 @@ func (s *Service) SetEmailSender(fn EmailSender) {
 // generates a magic link token, and stores its hash in the database.
 // In development mode the raw token is logged to the console.
 func (s *Service) RequestMagicLink(ctx context.Context, email string) error {
+	if s.cfg.OIDCEnabled() {
+		return ErrMagicLinkDisabled
+	}
+
 	// Validate email format.
 	if _, err := mail.ParseAddress(email); err != nil {
 		return ErrInvalidEmail
@@ -140,6 +146,10 @@ func (s *Service) RequestMagicLink(ctx context.Context, email string) error {
 // VerifyMagicLink verifies a raw magic link token, marks it as used, creates a
 // session, and returns the session token along with the organizer.
 func (s *Service) VerifyMagicLink(ctx context.Context, rawToken string) (*AuthResponse, error) {
+	if s.cfg.OIDCEnabled() {
+		return nil, ErrInvalidToken
+	}
+
 	tokenHash := hashToken(rawToken)
 
 	ml, err := s.store.FindMagicLinkByHash(ctx, tokenHash)
@@ -240,6 +250,15 @@ func (s *Service) ValidateSession(ctx context.Context, rawToken string) (*Organi
 	organizer, err := s.store.FindOrganizerByID(ctx, session.OrganizerID)
 	if err != nil {
 		return nil, fmt.Errorf("find organizer: %w", err)
+	}
+	if organizer == nil {
+		return nil, ErrSessionNotFound
+	}
+
+	// With OIDC enabled, a session counts only for an organizer linked to the
+	// configured issuer. This ends sessions left over from magic links.
+	if s.cfg.OIDCEnabled() && !s.IsOIDCLinked(organizer) {
+		return nil, ErrSessionNotFound
 	}
 
 	// Sync admin status on every session validation so that changes to

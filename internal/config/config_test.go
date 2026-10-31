@@ -127,3 +127,51 @@ func TestLoadParsesTrustedProxies(t *testing.T) {
 	assert.Equal(t, "192.168.1.5/32", cfg.TrustedProxyPrefixes[1].String())
 	assert.Equal(t, "2001:db8::/32", cfg.TrustedProxyPrefixes[2].String())
 }
+
+func TestLoadOIDC(t *testing.T) {
+	t.Setenv("ENV", "production")
+	t.Setenv("BASE_URL", "https://rsvp.example.com/")
+	t.Setenv("OIDC_ISSUER_URL", "https://id.example.com/")
+	t.Setenv("OIDC_CLIENT_ID", "openrsvp")
+	t.Setenv("OIDC_ALLOWED_GROUPS", " organizers , ,admins")
+	t.Setenv("OIDC_PROVIDER_NAME", "Pocket ID")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.OIDCEnabled())
+	assert.Equal(t, "https://id.example.com", cfg.OIDCIssuerURL, "trailing slash trimmed to match the token issuer")
+	assert.Equal(t, []string{"organizers", "admins"}, cfg.OIDCAllowedGroups)
+	assert.Equal(t, "Pocket ID", cfg.OIDCProviderName)
+	assert.Equal(t, "https://rsvp.example.com/api/v1/auth/oidc/callback", cfg.OIDCRedirectURL())
+}
+
+func TestLoadOIDCDisabledByDefault(t *testing.T) {
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.False(t, cfg.OIDCEnabled())
+}
+
+func TestLoadOIDCValidation(t *testing.T) {
+	cases := map[string]struct {
+		env  map[string]string
+		want string
+	}{
+		"client id without issuer": {map[string]string{"OIDC_CLIENT_ID": "x"}, "OIDC_ISSUER_URL is required"},
+		"issuer without client id": {map[string]string{"OIDC_ISSUER_URL": "https://id.example.com"}, "OIDC_CLIENT_ID is required"},
+		"http issuer in production": {map[string]string{
+			"ENV": "production", "OIDC_ISSUER_URL": "http://id.example.com", "OIDC_CLIENT_ID": "x",
+		}, "must use https://"},
+		"not a url": {map[string]string{"OIDC_ISSUER_URL": "id.example.com", "OIDC_CLIENT_ID": "x"}, "invalid OIDC_ISSUER_URL"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			_, err := Load()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}

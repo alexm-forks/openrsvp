@@ -4,13 +4,17 @@ import "time"
 
 // Organizer represents a user who creates and manages events.
 type Organizer struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	Timezone  string    `json:"timezone"`
-	IsAdmin   bool      `json:"isAdmin"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Timezone string `json:"timezone"`
+	IsAdmin  bool   `json:"isAdmin"`
+	// OIDCIssuer and OIDCSubject identify the linked OpenID Connect account.
+	// Both are empty for an organizer created by magic link.
+	OIDCIssuer  string    `json:"-"`
+	OIDCSubject string    `json:"-"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // UpdateProfileRequest is the request body for updating an organizer's profile.

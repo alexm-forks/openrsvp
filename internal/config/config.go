@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -88,6 +89,16 @@ type Config struct {
 	DefaultTimezone string
 	AllowSignups    bool
 	SupportEmail    string
+
+	// OpenID Connect sign-in. When OIDCIssuerURL is set, OIDC is the only
+	// way for organizers to sign in: the magic link endpoints are disabled,
+	// sessions are accepted only for organizers linked to this issuer, and
+	// only linked organizers can be added as co-hosts.
+	OIDCIssuerURL     string
+	OIDCClientID      string
+	OIDCClientSecret  string
+	OIDCAllowedGroups []string // when non-empty, the groups claim must contain one of these
+	OIDCProviderName  string   // label for the sign-in button
 }
 
 // Load reads environment variables (optionally from .env) and returns a Config.
@@ -245,7 +256,55 @@ func Load() (*Config, error) {
 		}
 	}
 
+	if err := loadOIDC(cfg); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// loadOIDC reads and validates the OIDC_* settings into cfg.
+func loadOIDC(cfg *Config) error {
+	cfg.OIDCIssuerURL = strings.TrimRight(getEnv("OIDC_ISSUER_URL", ""), "/")
+	cfg.OIDCClientID = getEnv("OIDC_CLIENT_ID", "")
+	cfg.OIDCClientSecret = getEnv("OIDC_CLIENT_SECRET", "")
+	cfg.OIDCProviderName = getEnv("OIDC_PROVIDER_NAME", "SSO")
+	if raw := getEnv("OIDC_ALLOWED_GROUPS", ""); raw != "" {
+		for _, g := range strings.Split(raw, ",") {
+			if g = strings.TrimSpace(g); g != "" {
+				cfg.OIDCAllowedGroups = append(cfg.OIDCAllowedGroups, g)
+			}
+		}
+	}
+
+	if cfg.OIDCIssuerURL == "" {
+		if cfg.OIDCClientID != "" || cfg.OIDCClientSecret != "" || len(cfg.OIDCAllowedGroups) > 0 {
+			return fmt.Errorf("OIDC_ISSUER_URL is required when other OIDC_* settings are set")
+		}
+		return nil
+	}
+	if cfg.OIDCClientID == "" {
+		return fmt.Errorf("OIDC_CLIENT_ID is required when OIDC_ISSUER_URL is set")
+	}
+	issuer, err := url.Parse(cfg.OIDCIssuerURL)
+	if err != nil || issuer.Host == "" || (issuer.Scheme != "https" && issuer.Scheme != "http") {
+		return fmt.Errorf("invalid OIDC_ISSUER_URL: %q", cfg.OIDCIssuerURL)
+	}
+	if issuer.Scheme == "http" && !cfg.IsDevelopment() {
+		return fmt.Errorf("invalid OIDC_ISSUER_URL: must use https:// when ENV=production")
+	}
+	return nil
+}
+
+// OIDCEnabled reports whether organizers sign in with OpenID Connect. When it
+// is true, magic link sign-in is disabled.
+func (c *Config) OIDCEnabled() bool {
+	return c.OIDCIssuerURL != ""
+}
+
+// OIDCRedirectURL is the callback URL to register with the OIDC provider.
+func (c *Config) OIDCRedirectURL() string {
+	return strings.TrimRight(c.BaseURL, "/") + "/api/v1/auth/oidc/callback"
 }
 
 // IsAdminEmail returns true if the given email is in the ADMIN_EMAILS list.

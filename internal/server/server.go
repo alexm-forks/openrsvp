@@ -133,6 +133,11 @@ func New(cfg *config.Config, db database.DB, logger zerolog.Logger) *Server {
 		if org == nil {
 			return "", "", nil
 		}
+		// With OIDC enabled, only organizers who have signed in through the
+		// identity provider can be co-hosts. Others read as not found.
+		if cfg.OIDCEnabled() && !authService.IsOIDCLinked(org) {
+			return "", "", nil
+		}
 		return org.ID, org.Name, nil
 	})
 

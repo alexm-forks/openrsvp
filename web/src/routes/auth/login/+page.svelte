@@ -4,6 +4,34 @@
 	import { isValidEmail } from '#lib/utils/validation.js';
 	import Button from '#lib/components/ui/Button.svelte';
 	import Input from '#lib/components/ui/Input.svelte';
+	import Spinner from '#lib/components/ui/Spinner.svelte';
+	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { authMode, oidcName, loadAppConfig } from '#lib/stores/config.js';
+
+	// Messages for the error codes the OIDC callback sends back. Unknown
+	// codes fall back to the generic message; the text is never taken from
+	// the URL.
+	const oidcErrors: Record<string, string> = {
+		unavailable: 'The sign-in service is unavailable right now. Please try again shortly.',
+		denied: 'Sign-in was cancelled.',
+		state: 'Your sign-in session expired. Please try again.',
+		unverified_email:
+			'Your account needs a verified email address. Verify it with your identity provider, then try again.',
+		not_allowed: 'Your account is not allowed to use this OpenRSVP instance.',
+		email_conflict:
+			'Your email address is already linked to a different account. Ask an administrator for help.',
+		failed: 'Sign-in failed. Please try again.'
+	};
+
+	let configReady = $state(false);
+	const errorCode = $derived(page.url.searchParams.get('error'));
+	const oidcError = $derived(errorCode ? (oidcErrors[errorCode] ?? oidcErrors.failed) : '');
+
+	onMount(async () => {
+		await loadAppConfig();
+		configReady = true;
+	});
 
 	let email = $state('');
 	let loading = $state(false);
@@ -46,11 +74,40 @@
 		<div class="text-center mb-8">
 			<a href="/" class="text-2xl font-bold text-primary">OpenRSVP</a>
 			<h1 class="font-display mt-4 text-2xl font-semibold text-neutral-900">Sign in to your account</h1>
-			<p class="mt-2 text-neutral-600">Enter your email to receive a magic link</p>
+			{#if configReady && $authMode === 'oidc'}
+				<p class="mt-2 text-neutral-600">Sign in with your {$oidcName || 'SSO'} account</p>
+			{:else if configReady}
+				<p class="mt-2 text-neutral-600">Enter your email to receive a magic link</p>
+			{/if}
 		</div>
 
 		<div class="bg-surface rounded-lg shadow-sm border border-neutral-200 p-8">
-			{#if sent}
+			{#if !configReady}
+				<div class="flex justify-center py-4"><Spinner /></div>
+			{:else if $authMode === 'oidc'}
+				{#if oidcError}
+					<p
+						class="mb-6 rounded-md border border-error/30 bg-error-light px-4 py-3 text-sm text-error"
+						role="alert"
+					>
+						{oidcError}
+					</p>
+				{/if}
+				<!-- Full page navigation: the server redirects to the identity provider. -->
+				<a
+					href="/api/v1/auth/oidc/login"
+					data-sveltekit-reload
+					class="inline-flex w-full items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-white transition-colors duration-short ease-out hover:bg-primary-hover focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+				>
+					Sign in with {$oidcName || 'SSO'}
+				</a>
+
+				<div class="mt-6 text-center">
+					<a href="/" class="text-sm text-primary hover:text-primary-hover">
+						Back to home
+					</a>
+				</div>
+			{:else if sent}
 				<!-- Success state -->
 				<div class="text-center">
 					<div

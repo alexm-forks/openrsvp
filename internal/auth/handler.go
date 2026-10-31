@@ -18,15 +18,20 @@ type Handler struct {
 	service *Service
 	cfg     *config.Config
 	logger  zerolog.Logger
+	oidc    *oidcClient // nil unless OIDC sign-in is configured
 }
 
 // NewHandler creates a new auth Handler.
 func NewHandler(service *Service, cfg *config.Config, logger zerolog.Logger) *Handler {
-	return &Handler{
+	h := &Handler{
 		service: service,
 		cfg:     cfg,
 		logger:  logger,
 	}
+	if cfg.OIDCEnabled() {
+		h.oidc = newOIDCClient(cfg, logger)
+	}
+	return h
 }
 
 // Routes returns a chi.Router with all auth routes mounted.
@@ -37,16 +42,22 @@ func NewHandler(service *Service, cfg *config.Config, logger zerolog.Logger) *Ha
 func (h *Handler) Routes(loginRateLimit ...func(http.Handler) http.Handler) chi.Router {
 	r := chi.NewRouter()
 
-	if len(loginRateLimit) > 0 && loginRateLimit[0] != nil {
-		r.Group(func(rl chi.Router) {
+	r.Group(func(rl chi.Router) {
+		if len(loginRateLimit) > 0 && loginRateLimit[0] != nil {
 			rl.Use(loginRateLimit[0])
+		}
+		if h.oidc != nil {
+			// OIDC is the only sign-in method. The magic link endpoints
+			// stay registered so they answer with a clear 404.
+			rl.Get("/oidc/login", h.handleOIDCLogin)
+			rl.Get("/oidc/callback", h.handleOIDCCallback)
+			rl.Post("/magic-link", h.handleMagicLinkDisabled)
+			rl.Post("/verify", h.handleMagicLinkDisabled)
+		} else {
 			rl.Post("/magic-link", h.handleMagicLink)
 			rl.Post("/verify", h.handleVerify)
-		})
-	} else {
-		r.Post("/magic-link", h.handleMagicLink)
-		r.Post("/verify", h.handleVerify)
-	}
+		}
+	})
 
 	r.Post("/logout", h.handleLogout)
 	r.With(RequireAuth(h.service)).Get("/me", h.handleMe)
@@ -113,6 +124,20 @@ func (h *Handler) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.setSessionCookies(w, resp.Token)
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleMagicLinkDisabled answers the magic link endpoints when OIDC is the
+// sign-in method.
+func (h *Handler) handleMagicLinkDisabled(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "magic link sign-in is disabled"})
+}
+
+// setSessionCookies sets the session cookie after a successful sign-in and
+// clears the pre-login CSRF token.
+func (h *Handler) setSessionCookies(w http.ResponseWriter, token string) {
 	// Set the session cookie. MaxAge mirrors the server-side session
 	// lifetime so the browser-side cookie does not outlive the database
 	// record (otherwise the cookie sits around looking valid while every
@@ -120,7 +145,7 @@ func (h *Handler) handleVerify(w http.ResponseWriter, r *http.Request) {
 	secure := !h.cfg.IsDevelopment()
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
-		Value:    resp.Token,
+		Value:    token,
 		Path:     "/",
 		MaxAge:   int(h.cfg.SessionExpiry / time.Second),
 		HttpOnly: true,
@@ -139,8 +164,6 @@ func (h *Handler) handleVerify(w http.ResponseWriter, r *http.Request) {
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 	})
-
-	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleLogout handles POST /api/v1/auth/logout.

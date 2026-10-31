@@ -137,6 +137,37 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `MAX_COHOSTS_PER_EVENT` | `10` | Maximum number of co-hosts allowed per event |
 | `ALLOW_SIGNUPS` | `true` | If `true`, any email can create an organizer account with a magic link. If `false`, only existing organizers and the emails in `ADMIN_EMAILS` can sign in. The setup wizard can change this value while the server runs. **If you set `false`, also set `ADMIN_EMAILS`. Otherwise nobody can sign in to a new instance** |
 | `ADMIN_EMAILS` | _(empty)_ | Comma-separated list of instance admin emails (e.g. `admin@example.com,ops@example.com`). Admin status is synced on every page load — add or remove emails and changes take effect immediately without requiring re-login |
+| `OIDC_ISSUER_URL` | _(empty)_ | OpenID Connect issuer, e.g. `https://id.example.com`. **When set, OIDC is the only way for organizers to sign in, and magic links are turned off.** See [Sign-in with OpenID Connect](#-sign-in-with-openid-connect-pocket-id) |
+| `OIDC_CLIENT_ID` | _(empty)_ | Client ID from the identity provider. Required with `OIDC_ISSUER_URL` |
+| `OIDC_CLIENT_SECRET` | _(empty)_ | Client secret. Leave empty for a public client, which uses PKCE alone |
+| `OIDC_ALLOWED_GROUPS` | _(empty)_ | Comma-separated groups. When set, the `groups` claim must contain one of them |
+| `OIDC_PROVIDER_NAME` | `SSO` | Label on the sign-in button, e.g. `Pocket ID` |
+
+### 🔐 Sign-in with OpenID Connect (Pocket ID)
+
+Set `OIDC_ISSUER_URL` and `OIDC_CLIENT_ID` to make OpenID Connect the only way for organizers to sign in. Guests are not affected: they never sign in, and RSVP links work as before. In this mode:
+
+- `/api/v1/auth/magic-link` and `/api/v1/auth/verify` answer `404`, and the login page shows a single "Sign in with …" button.
+- An organizer is matched on the provider's issuer and subject (`sub`), not on the email address.
+- The provider must send a verified email (`email_verified: true`). The email receives event mail and decides admin rights through `ADMIN_EMAILS`.
+- On the first OIDC sign-in, an existing organizer with the same verified email is linked to the identity, so events made before the switch carry over. Organizers who have not signed in through OIDC cannot use their old sessions and cannot be added as co-hosts.
+- `ALLOW_SIGNUPS` still applies. With `false`, only organizers who already exist and the emails in `ADMIN_EMAILS` can sign in. With `true`, everyone the provider lets through gets an account, so restrict access at the provider or with `OIDC_ALLOWED_GROUPS`.
+
+Setup with [Pocket ID](https://pocket-id.org):
+
+1. In Pocket ID, add an OIDC client. Set its callback URL to `<BASE_URL>/api/v1/auth/oidc/callback`, for example `https://rsvp.example.com/api/v1/auth/oidc/callback`. Mark it as a public client to use PKCE without a secret, or copy the secret into `OIDC_CLIENT_SECRET`.
+2. Limit who can sign in: either set the client's allowed user groups in Pocket ID, or set `OIDC_ALLOWED_GROUPS` here.
+3. Set the environment:
+
+   ```bash
+   OIDC_ISSUER_URL=https://id.example.com
+   OIDC_CLIENT_ID=<client id from Pocket ID>
+   OIDC_PROVIDER_NAME=Pocket ID
+   ```
+
+4. Admin rights follow the email from Pocket ID. Make sure users cannot set their own email to an address in `ADMIN_EMAILS`, either by turning off self-service account editing or by requiring email verification.
+
+Group membership and account status are checked at sign-in. A user removed at the provider keeps an existing session until it expires (`SESSION_EXPIRY`, 7 days by default). Shorten `SESSION_EXPIRY` if that is too long.
 
 ### 📧 Email Providers
 
@@ -207,6 +238,8 @@ All API endpoints are under `/api/v1`. The server also provides:
 |--------|------|-------------|
 | POST | `/api/v1/auth/magic-link` | Request magic link |
 | POST | `/api/v1/auth/verify` | Verify magic link token |
+| GET | `/api/v1/auth/oidc/login` | Start OIDC sign-in (OIDC mode only) |
+| GET | `/api/v1/auth/oidc/callback` | OIDC redirect target (OIDC mode only) |
 | POST | `/api/v1/auth/logout` | Logout |
 | GET | `/api/v1/auth/me` | Get current user |
 | GET | `/api/v1/auth/me/export` | Export all your data |
@@ -449,6 +482,15 @@ If you deployed `docker-compose.postgres.yml` **before v1.5.1**, rotate your Pos
 | Deployment | Docker (multi-stage, single binary) |
 
 ## 📝 Changelog
+
+### Unreleased
+
+**Features:**
+- Sign-in with OpenID Connect. Set `OIDC_ISSUER_URL` and `OIDC_CLIENT_ID` to make it the only organizer sign-in method; magic links are then turned off. Organizers are matched on issuer and subject, a verified email is required, and only OIDC-linked organizers can hold a session or be added as co-hosts. `OIDC_ALLOWED_GROUPS` limits sign-in to members of given groups. See [Sign-in with OpenID Connect](#-sign-in-with-openid-connect-pocket-id). Migration `000032` adds the identity columns to `organizers`
+
+**Security:**
+- The `X-Forwarded-For` parser read at most 50 entries from the left. A client sent 50 forged entries, so the address its proxy appended on the right was never read, and the client picked its own rate limit bucket. The parser now reads the header from the right. This applies only with `TRUSTED_PROXIES` set
+- New event share tokens are 16 characters (about 95 bits, was 8) and new RSVP manage tokens are 22 characters (about 131 bits, was 12). Links already sent keep working
 
 ### v1.8.3 (2026-09-23)
 
