@@ -147,16 +147,40 @@ func TestRealIPMiddleware(t *testing.T) {
 func TestRealIPMiddlewareEntryCap(t *testing.T) {
 	trusted := mustPrefixes(t, "10.0.0.0/8")
 
-	// Fill the header with exactly maxForwardedEntries trusted addresses,
-	// then append an untrusted one that the middleware must not read.
-	entries := make([]string, 0, maxForwardedEntries+1)
-	for i := 0; i < maxForwardedEntries; i++ {
+	// More than maxForwardedEntries trusted addresses, then the client the
+	// proxy appended last. The window is read from the right, so the client
+	// is found.
+	entries := make([]string, 0, maxForwardedEntries+11)
+	for i := 0; i < maxForwardedEntries+10; i++ {
 		entries = append(entries, fmt.Sprintf("10.1.0.%d", i))
 	}
 	entries = append(entries, "203.0.113.9")
 
 	got := serveRealIP(trusted, "10.0.0.1:1234", []string{strings.Join(entries, ", ")}, "")
+	assert.Equal(t, "203.0.113.9:1234", got)
 
-	// Every entry within the cap is trusted, so the leftmost one wins.
-	assert.Equal(t, "10.1.0.0:1234", got)
+	// All entries trusted: the leftmost one inside the window wins.
+	got = serveRealIP(trusted, "10.0.0.1:1234", []string{strings.Join(entries[:maxForwardedEntries+10], ", ")}, "")
+	assert.Equal(t, "10.1.0.10:1234", got)
+}
+
+// A client sends a long X-Forwarded-For of forged entries so that the entry
+// its proxy appends falls past the parse limit. The forged address must not
+// become the client address, or the client could pick any rate limit bucket.
+func TestRealIPMiddlewareForgedPaddingIgnored(t *testing.T) {
+	trusted := mustPrefixes(t, "10.0.0.1/32")
+
+	forged := strings.Repeat("junk,", maxForwardedEntries-1) + "6.6.6.6"
+	cases := map[string][]string{
+		// nginx $proxy_add_x_forwarded_for appends to the client's value.
+		"single header": {forged + ", 203.0.113.9"},
+		// Some proxies add a second header line instead.
+		"separate header": {forged, "203.0.113.9"},
+	}
+	for name, header := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := serveRealIP(trusted, "10.0.0.1:1234", header, "")
+			assert.Equal(t, "203.0.113.9:1234", got)
+		})
+	}
 }

@@ -63,42 +63,45 @@ func clientAddr(r *http.Request, trusted []netip.Prefix) (string, bool) {
 // forwardedAddr picks the client address from the X-Forwarded-For header.
 // It returns the rightmost entry that is not a trusted proxy, because an
 // attacker controls every entry to the left of its own proxy hop. It returns
-// the leftmost entry when all entries are trusted.
+// the leftmost entry it read when all of them are trusted.
+//
+// The header is read from the right, and at most maxForwardedEntries entries
+// are parsed. The entries a trusted proxy appends are on the right, so a long
+// header of forged entries on the left cannot push them out of the window.
 func forwardedAddr(r *http.Request, trusted []netip.Prefix) (netip.Addr, bool) {
 	var (
-		addrs  []netip.Addr
-		parsed int
+		leftmost netip.Addr
+		found    bool
+		parsed   int
 	)
 
-	for _, value := range r.Header.Values("X-Forwarded-For") {
-		for _, entry := range strings.Split(value, ",") {
-			if parsed >= maxForwardedEntries {
-				break
+	values := r.Header.Values("X-Forwarded-For")
+	for v := len(values) - 1; v >= 0 && parsed < maxForwardedEntries; v-- {
+		rest := values[v]
+		for parsed < maxForwardedEntries {
+			var entry string
+			if i := strings.LastIndexByte(rest, ','); i >= 0 {
+				entry, rest = rest[i+1:], rest[:i]
+			} else {
+				entry, rest = rest, ""
 			}
 			parsed++
 
-			addr, err := netip.ParseAddr(strings.TrimSpace(entry))
-			if err != nil {
-				continue
+			if addr, err := netip.ParseAddr(strings.TrimSpace(entry)); err == nil {
+				addr = addr.Unmap()
+				if !isTrustedAddr(addr, trusted) {
+					return addr, true
+				}
+				leftmost, found = addr, true
 			}
-			addrs = append(addrs, addr.Unmap())
-		}
-		if parsed >= maxForwardedEntries {
-			break
-		}
-	}
 
-	if len(addrs) == 0 {
-		return netip.Addr{}, false
-	}
-
-	for i := len(addrs) - 1; i >= 0; i-- {
-		if !isTrustedAddr(addrs[i], trusted) {
-			return addrs[i], true
+			if rest == "" {
+				break
+			}
 		}
 	}
 
-	return addrs[0], true
+	return leftmost, found
 }
 
 // isTrustedAddr reports whether addr is inside one of the trusted prefixes.
