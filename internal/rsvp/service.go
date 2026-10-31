@@ -465,7 +465,7 @@ func (s *Service) SubmitRSVP(ctx context.Context, shareToken string, req RSVPReq
 	}
 
 	// Create a new attendee.
-	rsvpToken, err := generateBase62Token(12)
+	rsvpToken, err := generateBase62Token(RSVPTokenLength)
 	if err != nil {
 		return nil, fmt.Errorf("generate rsvp token: %w", err)
 	}
@@ -1102,6 +1102,11 @@ func isValidRSVPStatus(status string) bool {
 		return false
 	}
 }
+
+// RSVPTokenLength is the length of new RSVP manage tokens. 22 base62
+// characters carry about 131 bits. Tokens issued with the earlier length of
+// 12 keep working.
+const RSVPTokenLength = 22
 
 // generateBase62Token generates a random token of the given length using base62
 // characters (0-9, a-z, A-Z).

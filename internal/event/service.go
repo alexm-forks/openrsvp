@@ -154,7 +154,7 @@ func (s *Service) Create(ctx context.Context, organizerID string, req CreateEven
 		return nil, errcode.Validationf("phone-only contact requirement is not available when SMS is disabled")
 	}
 
-	shareToken, err := generateBase62Token(8)
+	shareToken, err := generateBase62Token(ShareTokenLength)
 	if err != nil {
 		return nil, fmt.Errorf("generate share token: %w", err)
 	}
@@ -539,7 +539,7 @@ func (s *Service) Duplicate(ctx context.Context, eventID, organizerID string) (*
 		return nil, fmt.Errorf("forbidden: you do not own this event")
 	}
 
-	shareToken, err := generateBase62Token(8)
+	shareToken, err := generateBase62Token(ShareTokenLength)
 	if err != nil {
 		return nil, fmt.Errorf("generate share token: %w", err)
 	}
@@ -632,6 +632,11 @@ func isValidContactRequirement(s string) bool {
 		return false
 	}
 }
+
+// ShareTokenLength is the length of new event share tokens. 16 base62
+// characters carry about 95 bits, far beyond guessing even without rate
+// limits. Tokens issued with the earlier length of 8 keep working.
+const ShareTokenLength = 16
 
 // generateBase62Token generates a random token of the given length using base62
 // characters (0-9, a-z, A-Z).

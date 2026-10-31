@@ -291,7 +291,7 @@ func (s *Service) ExecuteCSVImport(ctx context.Context, eventID, organizerID str
 		}
 
 		// Generate RSVP token.
-		rsvpToken, err := generateBase62Token(12)
+		rsvpToken, err := generateBase62Token(RSVPTokenLength)
 		if err != nil {
 			s.logger.Error().Err(err).Str("name", row.Name).Msg("csv import: failed to generate rsvp token")
 			result.Failed++

@@ -479,7 +479,7 @@ func (s *SeriesService) DeleteSeries(ctx context.Context, seriesID, organizerID 
 // buildOccurrenceFromSeries creates an Event struct from a series template
 // for the given date and index.
 func (s *SeriesService) buildOccurrenceFromSeries(series *EventSeries, eventDate time.Time, index int) *Event {
-	shareToken, err := generateBase62Token(8)
+	shareToken, err := generateBase62Token(ShareTokenLength)
 	if err != nil {
 		// Extremely unlikely; fall back to a UUID prefix.
 		shareToken = uuid.Must(uuid.NewV7()).String()[:8]
